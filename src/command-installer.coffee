@@ -1,6 +1,5 @@
 path = require 'path'
 fs = require 'fs-plus'
-runas = null # defer until used
 
 symlinkCommand = (sourcePath, destinationPath, callback) ->
   fs.unlink destinationPath, (error) ->
@@ -13,16 +12,19 @@ symlinkCommand = (sourcePath, destinationPath, callback) ->
         else
           fs.symlink sourcePath, destinationPath, callback
 
-symlinkCommandWithPrivilegeSync = (sourcePath, destinationPath) ->
-  runas ?= require 'runas'
-  if runas('/bin/rm', ['-f', destinationPath], admin: true) isnt 0
-    throw new Error("Failed to remove '#{destinationPath}'")
+symlinkCommandWithPrivilege = (sourcePath, destinationPath, callback) ->
+  spawnAsAdmin = require 'spawn-as-admin'
 
-  if runas('/bin/mkdir', ['-p', path.dirname(destinationPath)], admin: true) isnt 0
-    throw new Error("Failed to create directory '#{destinationPath}'")
-
-  if runas('/bin/ln', ['-s', sourcePath, destinationPath], admin: true) isnt 0
-    throw new Error("Failed to symlink '#{sourcePath}' to '#{destinationPath}'")
+  spawnAsAdmin('rm', ['-f', destinationPath]).on 'exit', (code) ->
+    if code isnt 0
+      return callback(new Error("Failed to remove '#{destinationPath}'"))
+    spawnAsAdmin('mkdir', ['-p', path.dirname(destinationPath)]).on 'exit', (code) ->
+      if code isnt 0
+        return callback(new Error("Failed to create directory '#{destinationPath}'"))
+      spawnAsAdmin('ln', ['-s', sourcePath, destinationPath]).on 'exit', (code) ->
+        if code isnt 0
+          return callback(new Error("Failed to symlink '#{sourcePath}' to '#{destinationPath}'"))
+        callback(null)
 
 module.exports =
 class CommandInstaller
@@ -84,10 +86,7 @@ class CommandInstaller
 
       symlinkCommand commandPath, destinationPath, (error) ->
         if askForPrivilege and error?.code is 'EACCES'
-          try
-            error = null
-            symlinkCommandWithPrivilegeSync(commandPath, destinationPath)
-          catch err
-            error = err
-
-        callback?(error)
+          symlinkCommandWithPrivilege commandPath, destinationPath, (error) ->
+            callback?(error)
+        else
+          callback?(error)
